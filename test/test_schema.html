@@ -11,8 +11,14 @@
       font: 10.5pt arial;
       color: #4d4d4d;
       line-height: 150%;
-      width: 500px;
+      width: 600px;
       padding-left: 40px;
+    }
+
+    html, body {
+      width: 100%;
+      padding: 0;
+      box-sizing: border-box;
     }
 
     code {
@@ -20,7 +26,8 @@
     }
 
     #jsoneditor {
-      width: 500px;
+      max-width: 600px;
+      width: 90%;
       height: 500px;
     }
   </style>
@@ -39,7 +46,7 @@
   var container = document.getElementById('jsoneditor');
 
   var schema = {
-    "title": "Example Schema",
+    "title": "User",
     "type": "object",
     "properties": {
       "firstName": {
@@ -53,26 +60,32 @@
       },
       "age": {
         "description": "Age in years",
+        "examples": [18, 65],
         "type": "integer",
         "minimum": 0
       },
       "hobbies": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
+        "$ref": "hobbies.json"
       }
     },
     "required": ["firstName", "lastName"]
   };
 
+  var hobbiesSchema = {
+    "type": "array",
+    "items": {
+      "type": "string"
+    }
+  };
+
   var options = {
     mode: 'tree',
-    modes: ['code', 'form', 'text', 'tree', 'view'], // allowed modes
+    modes: ['code', 'form', 'text', 'tree', 'view', 'preview'], // allowed modes
     onError: function (err) {
       console.error(err);
     },
-    schema: schema
+    schema: schema,
+    schemaRefs: {"hobbies.json": hobbiesSchema}
   };
 
   var json = {

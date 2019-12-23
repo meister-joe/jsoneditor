@@ -2,20 +2,9 @@
 
 ### Install
 
-with npm:
+Install via npm:
 
     npm install jsoneditor
-
-with bower:
-
-    bower install jsoneditor
-
-download:
-
-[http://jsoneditoronline.org/downloads/](http://jsoneditoronline.org/downloads/)
-
-The library consists of three files: one javascript file, one css file and an
-image. Both full and minified version are available.
 
 ## Load
 
@@ -29,7 +18,7 @@ in the head of the HTML page:
 
 ## Use
 
-In the body, create an div element with an id and a size:
+In the body, create a div element with an id and a size:
 
 ```html
 <div id="jsoneditor" style="width: 400px; height: 400px;"></div>
