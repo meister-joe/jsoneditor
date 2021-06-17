@@ -5,8 +5,10 @@ const VanillaPicker = require('./vanilla-picker') // may be undefined in case of
 const { treeModeMixins } = require('./treemode')
 const { textModeMixins } = require('./textmode')
 const { previewModeMixins } = require('./previewmode')
-const { clear, extend, getInternetExplorerVersion, parse } = require('./util')
+const { clear, extend, getInnerText, getInternetExplorerVersion, parse } = require('./util')
 const { tryRequireAjv } = require('./tryRequireAjv')
+const { showTransformModal } = require('./showTransformModal')
+const { showSortModal } = require('./showSortModal')
 
 const Ajv = tryRequireAjv()
 
@@ -169,7 +171,7 @@ function JSONEditor (container, options, json) {
  */
 JSONEditor.modes = {}
 
-// debounce interval for JSON schema vaidation in milliseconds
+// debounce interval for JSON schema validation in milliseconds
 JSONEditor.prototype.DEBOUNCE_INTERVAL = 150
 
 JSONEditor.VALID_OPTIONS = [
@@ -182,9 +184,10 @@ JSONEditor.VALID_OPTIONS = [
   'colorPicker', 'onColorPicker',
   'timestampTag', 'timestampFormat',
   'escapeUnicode', 'history', 'search', 'mode', 'modes', 'name', 'indentation',
-  'sortObjectKeys', 'navigationBar', 'statusBar', 'mainMenuBar', 'languages', 'language', 'enableSort', 'enableTransform',
+  'sortObjectKeys', 'navigationBar', 'statusBar', 'mainMenuBar', 'languages', 'language', 'enableSort', 'enableTransform', 'limitDragging',
   'maxVisibleChilds', 'onValidationError',
-  'modalAnchor', 'popupAnchor'
+  'modalAnchor', 'popupAnchor',
+  'createQuery', 'executeQuery', 'queryDescription'
 ]
 
 /**
@@ -477,6 +480,11 @@ JSONEditor.registerMode(previewModeMixins)
 JSONEditor.ace = ace
 JSONEditor.Ajv = Ajv
 JSONEditor.VanillaPicker = VanillaPicker
+
+// expose some utils (this is undocumented, unofficial)
+JSONEditor.showTransformModal = showTransformModal
+JSONEditor.showSortModal = showSortModal
+JSONEditor.getInnerText = getInnerText
 
 // default export for TypeScript ES6 projects
 JSONEditor.default = JSONEditor

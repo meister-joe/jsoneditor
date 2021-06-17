@@ -2,6 +2,7 @@
 
 import './polyfills'
 import naturalSort from 'javascript-natural-sort'
+import jsonrepair from 'jsonrepair'
 import jsonlint from './assets/jsonlint/jsonlint'
 import jsonMap from 'json-source-map'
 import { translate } from './i18n'
@@ -28,249 +29,16 @@ export function parse (jsonString) {
 }
 
 /**
- * Repair a JSON-like string containing. For example changes JavaScript
- * notation into JSON notation.
- * This function for example changes a string like "{a: 2, 'b': {c: 'd'}"
- * into '{"a": 2, "b": {"c": "d"}'
- * @param {string} jsString
- * @returns {string} json
+ * Try to fix the JSON string. If not successful, return the original string
+ * @param {string} jsonString
  */
-export function repair (jsString) {
-  // TODO: refactor this function, it's too large and complicated now
-
-  // escape all single and double quotes inside strings
-  const chars = []
-  let i = 0
-
-  // If JSON starts with a function (characters/digits/"_-"), remove this function.
-  // This is useful for "stripping" JSONP objects to become JSON
-  // For example: /* some comment */ function_12321321 ( [{"a":"b"}] ); => [{"a":"b"}]
-  const match = jsString.match(/^\s*(\/\*(.|[\r\n])*?\*\/)?\s*[\da-zA-Z_$]+\s*\(([\s\S]*)\)\s*;?\s*$/)
-  if (match) {
-    jsString = match[3]
+export function tryJsonRepair (jsonString) {
+  try {
+    return jsonrepair(jsonString)
+  } catch (err) {
+    // repair was not successful, return original text
+    return jsonString
   }
-
-  const controlChars = {
-    '\b': '\\b',
-    '\f': '\\f',
-    '\n': '\\n',
-    '\r': '\\r',
-    '\t': '\\t'
-  }
-
-  const quote = '\''
-  const quoteDbl = '"'
-  const quoteLeft = '\u2018'
-  const quoteRight = '\u2019'
-  const quoteDblLeft = '\u201C'
-  const quoteDblRight = '\u201D'
-  const graveAccent = '\u0060'
-  const acuteAccent = '\u00B4'
-
-  // helper functions to get the current/prev/next character
-  function curr () { return jsString.charAt(i) }
-  function next () { return jsString.charAt(i + 1) }
-  function prev () { return jsString.charAt(i - 1) }
-
-  function isWhiteSpace (c) {
-    return c === ' ' || c === '\n' || c === '\r' || c === '\t'
-  }
-
-  // get the last parsed non-whitespace character
-  function lastNonWhitespace () {
-    let p = chars.length - 1
-
-    while (p >= 0) {
-      const pp = chars[p]
-      if (!isWhiteSpace(pp)) {
-        return pp
-      }
-      p--
-    }
-
-    return ''
-  }
-
-  // get at the first next non-white space character
-  function nextNonWhiteSpace () {
-    let iNext = i + 1
-    while (iNext < jsString.length && isWhiteSpace(jsString[iNext])) {
-      iNext++
-    }
-
-    return jsString[iNext]
-  }
-
-  // skip a block comment '/* ... */'
-  function skipBlockComment () {
-    i += 2
-    while (i < jsString.length && (curr() !== '*' || next() !== '/')) {
-      i++
-    }
-    i += 2
-  }
-
-  // skip a comment '// ...'
-  function skipComment () {
-    i += 2
-    while (i < jsString.length && (curr() !== '\n')) {
-      i++
-    }
-  }
-
-  /**
-   * parse single or double quoted string. Returns the parsed string
-   * @param {string} endQuote
-   * @return {string}
-   */
-  function parseString (endQuote) {
-    let string = ''
-
-    string += '"'
-    i++
-    let c = curr()
-    while (i < jsString.length && c !== endQuote) {
-      if (c === '"' && prev() !== '\\') {
-        // unescaped double quote, escape it
-        string += '\\"'
-      } else if (c in controlChars) {
-        // replace unescaped control characters with escaped ones
-        string += controlChars[c]
-      } else if (c === '\\') {
-        // remove the escape character when followed by a single quote ', not needed
-        i++
-        c = curr()
-        if (c !== '\'') {
-          string += '\\'
-        }
-        string += c
-      } else {
-        // regular character
-        string += c
-      }
-
-      i++
-      c = curr()
-    }
-    if (c === endQuote) {
-      string += '"'
-      i++
-    }
-
-    return string
-  }
-
-  // parse an unquoted key
-  function parseKey () {
-    const specialValues = ['null', 'true', 'false']
-    let key = ''
-    let c = curr()
-
-    const regexp = /[a-zA-Z_$\d]/ // letter, number, underscore, dollar character
-    while (regexp.test(c)) {
-      key += c
-      i++
-      c = curr()
-    }
-
-    if (specialValues.indexOf(key) === -1) {
-      return '"' + key + '"'
-    } else {
-      return key
-    }
-  }
-
-  function parseMongoDataType () {
-    let c = curr()
-    let value
-    let dataType = ''
-    while (/[a-zA-Z_$]/.test(c)) {
-      dataType += c
-      i++
-      c = curr()
-    }
-
-    if (dataType.length > 0 && c === '(') {
-      // This is an MongoDB data type like {"_id": ObjectId("123")}
-      i++
-      c = curr()
-      if (c === '"') {
-        // a data type containing a string, like ISODate("2012-12-19T06:01:17.171Z")
-        value = parseString(c)
-        c = curr()
-      } else {
-        // a data type containing a value, like 'NumberLong(2)'
-        value = ''
-        while (c !== ')' && c !== '') {
-          value += c
-          i++
-          c = curr()
-        }
-      }
-
-      if (c === ')') {
-        // skip the closing bracket at the end
-        i++
-
-        // return the value (strip the data type object)
-        return value
-      } else {
-        // huh? that's unexpected. don't touch it
-        return dataType + '(' + value + c
-      }
-    } else {
-      // hm, no Mongo data type after all
-      return dataType
-    }
-  }
-
-  function isSpecialWhiteSpace (c) {
-    return (
-      c === '\u00A0' ||
-        (c >= '\u2000' && c <= '\u200A') ||
-        c === '\u202F' ||
-        c === '\u205F' ||
-        c === '\u3000')
-  }
-
-  while (i < jsString.length) {
-    const c = curr()
-
-    if (c === '/' && next() === '*') {
-      skipBlockComment()
-    } else if (c === '/' && next() === '/') {
-      skipComment()
-    } else if (isSpecialWhiteSpace(c)) {
-      // special white spaces (like non breaking space)
-      chars.push(' ')
-      i++
-    } else if (c === quote) {
-      chars.push(parseString(c))
-    } else if (c === quoteDbl) {
-      chars.push(parseString(quoteDbl))
-    } else if (c === graveAccent) {
-      chars.push(parseString(acuteAccent))
-    } else if (c === quoteLeft) {
-      chars.push(parseString(quoteRight))
-    } else if (c === quoteDblLeft) {
-      chars.push(parseString(quoteDblRight))
-    } else if (c === ',' && [']', '}'].indexOf(nextNonWhiteSpace()) !== -1) {
-      // skip trailing commas
-      i++
-    } else if (/[a-zA-Z_$]/.test(c) && ['{', ','].indexOf(lastNonWhitespace()) !== -1) {
-      // an unquoted object key (like a in '{a:2}')
-      chars.push(parseKey())
-    } else {
-      if (/[a-zA-Z_$]/.test(c)) {
-        chars.push(parseMongoDataType())
-      } else {
-        chars.push(c)
-        i++
-      }
-    }
-  }
-
-  return chars.join('')
 }
 
 /**
@@ -387,6 +155,16 @@ export function isUrl (text) {
  */
 export function isArray (obj) {
   return Object.prototype.toString.call(obj) === '[object Array]'
+}
+
+/**
+ * Gets a DOM element's Window.  This is normally just the global `window`
+ * variable, but if we opened a child window, it may be different.
+ * @param {HTMLElement} element
+ * @return {Window}
+ */
+export function getWindow (element) {
+  return element.ownerDocument.defaultView
 }
 
 /**
@@ -597,7 +375,6 @@ export function setSelectionOffset (params) {
     }
   }
 }
-
 /**
  * Get the inner text of an HTML element (for example a div element)
  * @param {Element} element
@@ -608,21 +385,28 @@ export function getInnerText (element, buffer) {
   const first = (buffer === undefined)
   if (first) {
     buffer = {
-      text: '',
+      _text: '',
       flush: function () {
-        const text = this.text
-        this.text = ''
+        const text = this._text
+        this._text = ''
         return text
       },
       set: function (text) {
-        this.text = text
+        this._text = text
       }
     }
   }
 
   // text node
   if (element.nodeValue) {
-    return buffer.flush() + element.nodeValue
+    // remove return characters and the whitespace surrounding return characters
+    const trimmedValue = element.nodeValue.replace(/\s*\n\s*/g, '')
+    if (trimmedValue !== '') {
+      return buffer.flush() + trimmedValue
+    } else {
+      // ignore empty text
+      return ''
+    }
   }
 
   // divs or other HTML elements
@@ -637,7 +421,9 @@ export function getInnerText (element, buffer) {
         const prevChild = childNodes[i - 1]
         const prevName = prevChild ? prevChild.nodeName : undefined
         if (prevName && prevName !== 'DIV' && prevName !== 'P' && prevName !== 'BR') {
-          innerText += '\n'
+          if (innerText !== '') {
+            innerText += '\n'
+          }
           buffer.flush()
         }
         innerText += getInnerText(child, buffer)
@@ -651,15 +437,6 @@ export function getInnerText (element, buffer) {
     }
 
     return innerText
-  } else {
-    if (element.nodeName === 'P' && getInternetExplorerVersion() !== -1) {
-      // On Internet Explorer, a <p> with hasChildNodes()==false is
-      // rendered with a new line. Note that a <p> with
-      // hasChildNodes()==true is rendered without a new line
-      // Other browsers always ensure there is a <br> inside the <p>,
-      // and if not, the <p> does not render a new line
-      return buffer.flush()
-    }
   }
 
   // br or unknown
@@ -696,7 +473,7 @@ export function getInternetExplorerVersion () {
     let rv = -1 // Return value assumes failure.
     if (typeof navigator !== 'undefined' && navigator.appName === 'Microsoft Internet Explorer') {
       const ua = navigator.userAgent
-      const re = new RegExp('MSIE ([0-9]+[.0-9]+)')
+      const re = /MSIE ([0-9]+[.0-9]+)/
       if (re.exec(ua) != null) {
         rv = parseFloat(RegExp.$1)
       }
@@ -709,6 +486,13 @@ export function getInternetExplorerVersion () {
 }
 
 /**
+ * cached internet explorer version
+ * @type {Number}
+ * @private
+ */
+let _ieVersion = -1
+
+/**
  * Test whether the current browser is Firefox
  * @returns {boolean} isFirefox
  */
@@ -717,14 +501,7 @@ export function isFirefox () {
 }
 
 /**
- * cached internet explorer version
- * @type {Number}
- * @private
- */
-var _ieVersion = -1
-
-/**
- * Add and event listener. Works for all browsers
+ * Add an event listener. Works for all browsers
  * @param {Element}     element    An html element
  * @param {string}      action     The action, for example "click",
  *                                 without the prefix "on"
@@ -1074,7 +851,7 @@ export function getInputSelection (el) {
 }
 
 /**
- * Returns the index for certaion position in text element
+ * Returns the index for certain position in text element
  * @param {DOMElement} el A dom element of a textarea or input text.
  * @param {Number} row row value, > 0, if exceeds rows number - last row will be returned
  * @param {Number} column column value, > 0, if exceeds column length - end of column will be returned
@@ -1371,7 +1148,7 @@ export function isTimestamp (field, value) {
 
 /**
  * Return a human readable document size
- * For example formatSize(7570718) outputs '7.2 MiB'
+ * For example formatSize(7570718) outputs '7.6 MB'
  * @param {number} size
  * @return {string} Returns a human readable size
  */
@@ -1380,23 +1157,23 @@ export function formatSize (size) {
     return size.toFixed() + ' B'
   }
 
-  const KiB = size / 1024
-  if (KiB < 900) {
-    return KiB.toFixed(1) + ' KiB'
+  const KB = size / 1000
+  if (KB < 900) {
+    return KB.toFixed(1) + ' KB'
   }
 
-  const MiB = KiB / 1024
-  if (MiB < 900) {
-    return MiB.toFixed(1) + ' MiB'
+  const MB = KB / 1000
+  if (MB < 900) {
+    return MB.toFixed(1) + ' MB'
   }
 
-  const GiB = MiB / 1024
-  if (GiB < 900) {
-    return GiB.toFixed(1) + ' GiB'
+  const GB = MB / 1000
+  if (GB < 900) {
+    return GB.toFixed(1) + ' GB'
   }
 
-  const TiB = GiB / 1024
-  return TiB.toFixed(1) + ' TiB'
+  const TB = GB / 1000
+  return TB.toFixed(1) + ' TB'
 }
 
 /**
@@ -1434,7 +1211,7 @@ export function contains (array, item) {
 }
 
 /**
- * Checkes if validation has changed from the previous execution
+ * Checks if validation has changed from the previous execution
  * @param {Array} currErr current validation errors
  * @param {Array} prevErr previous validation errors
  */

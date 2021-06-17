@@ -1,6 +1,5 @@
 'use strict'
 
-import jmespath from 'jmespath'
 import naturalSort from 'javascript-natural-sort'
 import { createAbsoluteAnchor } from './createAbsoluteAnchor'
 import { ContextMenu } from './ContextMenu'
@@ -105,9 +104,17 @@ export class Node {
         if (typeof editable === 'boolean') {
           this.editable.field = editable
           this.editable.value = editable
-        } else {
+        } else if (typeof editable === 'object' && editable !== null) {
           if (typeof editable.field === 'boolean') this.editable.field = editable.field
           if (typeof editable.value === 'boolean') this.editable.value = editable.value
+        } else {
+          console.error(
+            'Invalid return value for function onEditable.',
+            'Actual value:', editable, '.',
+            'Either a boolean or object { field: boolean, value: boolean } expected.')
+
+          this.editable.field = false
+          this.editable.value = false
         }
       }
     }
@@ -155,8 +162,8 @@ export class Node {
     return !this.parent
       ? undefined // do not add an (optional) field name of the root node
       : (this.parent.type !== 'array')
-        ? this.field
-        : this.index
+          ? this.field
+          : this.index
   }
 
   /**
@@ -415,9 +422,9 @@ export class Node {
    *                         'array', 'object', or 'string'
    */
   setValue (value, type) {
-    let childValue, child, visible
+    let childValue, child
     let i, j
-    const notUpdateDom = false
+    const updateDom = false
     const previousChilds = this.childs
 
     this.type = this._getType(value)
@@ -454,8 +461,8 @@ export class Node {
             child = new Node(this.editor, {
               value: childValue
             })
-            visible = i < this.getMaxVisibleChilds()
-            this.appendChild(child, visible, notUpdateDom)
+            const visible = i < this.getMaxVisibleChilds()
+            this.appendChild(child, visible, updateDom)
           }
         }
       }
@@ -463,7 +470,7 @@ export class Node {
       // cleanup redundant childs
       // we loop backward to prevent issues with shifting index numbers
       for (j = this.childs.length; j >= value.length; j--) {
-        this.removeChild(this.childs[j], notUpdateDom)
+        this.removeChild(this.childs[j], updateDom)
       }
     } else if (this.type === 'object') {
       // object
@@ -475,7 +482,7 @@ export class Node {
       // we loop backward to prevent issues with shifting index numbers
       for (j = this.childs.length - 1; j >= 0; j--) {
         if (!hasOwnProperty(value, this.childs[j].field)) {
-          this.removeChild(this.childs[j], notUpdateDom)
+          this.removeChild(this.childs[j], updateDom)
         }
       }
 
@@ -484,20 +491,19 @@ export class Node {
         if (hasOwnProperty(value, childField)) {
           childValue = value[childField]
           if (childValue !== undefined && !(childValue instanceof Function)) {
-            child = this.findChildByProperty(childField)
-
+            const child = this.findChildByProperty(childField)
             if (child) {
               // reuse existing child, keep its state
               child.setField(childField, true)
               child.setValue(childValue)
             } else {
-              // create a new child
-              child = new Node(this.editor, {
+              // create a new child, append to the end
+              const newChild = new Node(this.editor, {
                 field: childField,
                 value: childValue
               })
-              visible = i < this.getMaxVisibleChilds()
-              this.appendChild(child, visible, notUpdateDom)
+              const visible = i < this.getMaxVisibleChilds()
+              this.appendChild(newChild, visible, updateDom)
             }
           }
           i++
@@ -505,9 +511,10 @@ export class Node {
       }
       this.value = ''
 
-      // sort object keys
+      // sort object keys during initialization. Must not trigger an onChange action
       if (this.editor.options.sortObjectKeys === true) {
-        this.sort([], 'asc')
+        const triggerAction = false
+        this.sort([], 'asc', triggerAction)
       }
     } else {
       // value
@@ -781,6 +788,9 @@ export class Node {
         child.expand(recurse)
       })
     }
+
+    // update the css classes of table row, and fire onClassName etc
+    this.updateDom({ recurse: false })
   }
 
   /**
@@ -807,6 +817,9 @@ export class Node {
       this.dom.expand.className = 'jsoneditor-button jsoneditor-collapsed'
     }
     this.expanded = false
+
+    // update the css classes of table row, and fire onClassName etc
+    this.updateDom({ recurse: false })
   }
 
   /**
@@ -1007,14 +1020,18 @@ export class Node {
    * Only applicable when Node value is of type array or object
    * @param {Node} node
    * @param {Node} beforeNode
+   * @param {boolean} [updateDom]  If true (default), the DOM of both parent
+   *                               node and appended node will be updated
+   *                               (child count, indexes)
    */
-  moveBefore (node, beforeNode) {
+  moveBefore (node, beforeNode, updateDom) {
     if (this._hasChilds()) {
       // create a temporary row, to prevent the scroll position from jumping
       // when removing the node
       const tbody = (this.dom.tr) ? this.dom.tr.parentNode : undefined
+      let trTemp
       if (tbody) {
-        var trTemp = document.createElement('tr')
+        trTemp = document.createElement('tr')
         trTemp.style.height = tbody.clientHeight + 'px'
         tbody.appendChild(trTemp)
       }
@@ -1027,15 +1044,16 @@ export class Node {
         // the this.childs.length + 1 is to reckon with the node that we're about to add
         if (this.childs.length + 1 > this.visibleChilds) {
           const lastVisibleNode = this.childs[this.visibleChilds - 1]
-          this.insertBefore(node, lastVisibleNode)
+          this.insertBefore(node, lastVisibleNode, updateDom)
         } else {
-          this.appendChild(node)
+          const visible = true
+          this.appendChild(node, visible, updateDom)
         }
       } else {
-        this.insertBefore(node, beforeNode)
+        this.insertBefore(node, beforeNode, updateDom)
       }
 
-      if (tbody) {
+      if (tbody && trTemp) {
         tbody.removeChild(trTemp)
       }
     }
@@ -1046,8 +1064,11 @@ export class Node {
    * Only applicable when Node value is of type array or object
    * @param {Node} node
    * @param {Node} beforeNode
+   * @param {boolean} [updateDom]  If true (default), the DOM of both parent
+   *                               node and appended node will be updated
+   *                               (child count, indexes)
    */
-  insertBefore (node, beforeNode) {
+  insertBefore (node, beforeNode, updateDom) {
     if (this._hasChilds()) {
       this.visibleChilds++
 
@@ -1089,8 +1110,10 @@ export class Node {
         this.showChilds()
       }
 
-      this.updateDom({ updateIndexes: true })
-      node.updateDom({ recurse: true })
+      if (updateDom !== false) {
+        this.updateDom({ updateIndexes: true })
+        node.updateDom({ recurse: true })
+      }
     }
   }
 
@@ -1464,30 +1487,16 @@ export class Node {
         return false
       }
 
-      // TODO: for better efficiency, we could create a property `isDuplicate` on all of the childs
-      // and keep that up to date. This should make deepEqual about 20% faster.
-      const props = {}
-      let propCount = 0
-      for (i = 0; i < this.childs.length; i++) {
-        const child = this.childs[i]
-        if (!props[child.field]) {
-          // We can have childs with duplicate field names.
-          // We take the first, and ignore the others.
-          props[child.field] = true
-          propCount++
-
-          if (!(child.field in json)) {
-            return false
-          }
-
-          if (!child.deepEqual(json[child.field])) {
-            return false
-          }
-        }
-      }
-
-      if (propCount !== Object.keys(json).length) {
+      // we reckon with the order of the properties too.
+      const props = Object.keys(json)
+      if (this.childs.length !== props.length) {
         return false
+      }
+      for (i = 0; i < props.length; i++) {
+        const child = this.childs[i]
+        if (child.field !== props[i] || !child.deepEqual(json[child.field])) {
+          return false
+        }
       }
     } else {
       if (this.value !== json) {
@@ -1507,6 +1516,12 @@ export class Node {
 
     if (this.dom.value && this.type !== 'array' && this.type !== 'object') {
       this.valueInnerText = getInnerText(this.dom.value)
+
+      if (this.valueInnerText === '' && this.dom.value.innerHTML !== '') {
+        // When clearing the contents, often a <br/> remains, messing up the
+        // styling of the empty text box. Therefore we remove the <br/>
+        this.dom.value.textContent = ''
+      }
     }
 
     if (this.valueInnerText !== undefined) {
@@ -1710,20 +1725,17 @@ export class Node {
           this.dom.select.name = this.dom.select.id
 
           // Create the default empty option
-          this.dom.select.option = document.createElement('option')
-          this.dom.select.option.value = ''
-          this.dom.select.option.innerHTML = '--'
-          this.dom.select.appendChild(this.dom.select.option)
+          const defaultOption = document.createElement('option')
+          defaultOption.value = ''
+          defaultOption.textContent = '--'
+          this.dom.select.appendChild(defaultOption)
 
           // Iterate all enum values and add them as options
           for (let i = 0; i < this.enum.length; i++) {
-            this.dom.select.option = document.createElement('option')
-            this.dom.select.option.value = this.enum[i]
-            this.dom.select.option.innerHTML = this.enum[i]
-            if (this.dom.select.option.value === this.value) {
-              this.dom.select.option.selected = true
-            }
-            this.dom.select.appendChild(this.dom.select.option)
+            const option = document.createElement('option')
+            option.value = this.enum[i]
+            option.textContent = this.enum[i]
+            this.dom.select.appendChild(option)
           }
 
           this.dom.tdSelect = document.createElement('td')
@@ -1731,6 +1743,11 @@ export class Node {
           this.dom.tdSelect.appendChild(this.dom.select)
           this.dom.tdValue.parentNode.insertBefore(this.dom.tdSelect, this.dom.tdValue)
         }
+
+        // Select the matching value
+        this.dom.select.value = (this.enum.indexOf(this.value) !== -1)
+          ? this.value
+          : '' // default
 
         // If the enum is inside a composite type display
         // both the simple input and the dropdown field
@@ -1741,7 +1758,7 @@ export class Node {
         ) {
           this.valueFieldHTML = this.dom.tdValue.innerHTML
           this.dom.tdValue.style.visibility = 'hidden'
-          this.dom.tdValue.innerHTML = ''
+          this.dom.tdValue.textContent = ''
         } else {
           delete this.valueFieldHTML
         }
@@ -1771,12 +1788,10 @@ export class Node {
           this.dom.tdColor.appendChild(this.dom.color)
 
           this.dom.tdValue.parentNode.insertBefore(this.dom.tdColor, this.dom.tdValue)
-
-          // this is a bit hacky, overriding the text color like this. find a nicer solution
-          this.dom.value.style.color = '#1A1A1A'
         }
 
-        // update the color background
+        // update styling of value and color background
+        addClassName(this.dom.value, 'jsoneditor-color-value')
         this.dom.color.style.backgroundColor = value
       } else {
         // cleanup color picker when displayed
@@ -1800,7 +1815,7 @@ export class Node {
           })
         }
         if (!title) {
-          this.dom.date.innerHTML = new Date(value).toISOString()
+          this.dom.date.textContent = new Date(value).toISOString()
         } else {
           while (this.dom.date.firstChild) {
             this.dom.date.removeChild(this.dom.date.firstChild)
@@ -1829,7 +1844,7 @@ export class Node {
       delete this.dom.tdColor
       delete this.dom.color
 
-      this.dom.value.style.color = ''
+      removeClassName(this.dom.value, 'jsoneditor-color-value')
     }
   }
 
@@ -1848,8 +1863,8 @@ export class Node {
         domField.title = tooltip
       }
 
-      // make backgound color lightgray when empty
-      const isEmpty = (String(this.field) === '' && this.parent.type !== 'array')
+      // make background color lightgray when empty
+      const isEmpty = (String(this.field) === '' && this.parent && this.parent.type !== 'array')
       if (isEmpty) {
         addClassName(domField, 'jsoneditor-empty')
       } else {
@@ -1884,6 +1899,12 @@ export class Node {
 
     if (this.dom.field && this.fieldEditable) {
       this.fieldInnerText = getInnerText(this.dom.field)
+
+      if (this.fieldInnerText === '' && this.dom.field.innerHTML !== '') {
+        // When clearing the contents, often a <br/> remains, messing up the
+        // styling of the empty text box. Therefore we remove the <br/>
+        this.dom.field.textContent = ''
+      }
     }
 
     if (this.fieldInnerText !== undefined) {
@@ -2213,31 +2234,62 @@ export class Node {
           fieldText = ''
         }
       }
-      domField.innerHTML = this._escapeHTML(fieldText)
 
+      const escapedField = this._escapeHTML(fieldText)
+      if (
+        document.activeElement !== domField &&
+        escapedField !== this._unescapeHTML(getInnerText(domField))
+      ) {
+        // only update if it not has the focus or when there is an actual change,
+        // else you would needlessly loose the caret position when changing tabs
+        // or whilst typing
+        domField.innerHTML = escapedField
+      }
       this._updateSchema()
     }
 
     // apply value to DOM
     const domValue = this.dom.value
     if (domValue) {
-      if (this.type === 'array') {
+      if (this.type === 'array' || this.type === 'object') {
         this.updateNodeName()
-        addClassName(this.dom.tr, 'jsoneditor-expandable')
-      } else if (this.type === 'object') {
-        this.updateNodeName()
-        addClassName(this.dom.tr, 'jsoneditor-expandable')
       } else {
-        domValue.innerHTML = this._escapeHTML(this.value)
-        removeClassName(this.dom.tr, 'jsoneditor-expandable')
+        const escapedValue = this._escapeHTML(this.value)
+        if (
+          document.activeElement !== domValue &&
+          escapedValue !== this._unescapeHTML(getInnerText(domValue))
+        ) {
+          // only update if it not has the focus or when there is an actual change,
+          // else you would needlessly loose the caret position when changing tabs
+          // or whilst typing
+          domValue.innerHTML = escapedValue
+        }
+      }
+    }
+
+    // apply styling to the table row
+    const tr = this.dom.tr
+    if (tr) {
+      if (this.type === 'array' || this.type === 'object') {
+        addClassName(tr, 'jsoneditor-expandable')
+
+        if (this.expanded) {
+          addClassName(tr, 'jsoneditor-expanded')
+          removeClassName(tr, 'jsoneditor-collapsed')
+        } else {
+          addClassName(tr, 'jsoneditor-collapsed')
+          removeClassName(tr, 'jsoneditor-expanded')
+        }
+      } else {
+        removeClassName(tr, 'jsoneditor-expandable')
+        removeClassName(tr, 'jsoneditor-expanded')
+        removeClassName(tr, 'jsoneditor-collapsed')
       }
     }
 
     // update field and value
     this._updateDomField()
     this._updateDomValue()
-
-    this._updateCssClassName()
 
     // update childs indexes
     if (options && options.updateIndexes === true) {
@@ -2268,6 +2320,9 @@ export class Node {
     if (this.showMore) {
       this.showMore.updateDom()
     }
+
+    // fire onClassName
+    this._updateCssClassName()
   }
 
   /**
@@ -2305,7 +2360,7 @@ export class Node {
           child.index = index
           const childField = child.dom.field
           if (childField) {
-            childField.innerHTML = index
+            childField.textContent = index
           }
         })
       } else if (this.type === 'object') {
@@ -2331,10 +2386,10 @@ export class Node {
 
     if (this.type === 'array') {
       domValue = document.createElement('div')
-      domValue.innerHTML = '[...]'
+      domValue.textContent = '[...]'
     } else if (this.type === 'object') {
       domValue = document.createElement('div')
-      domValue.innerHTML = '{...}'
+      domValue.textContent = '{...}'
     } else {
       if (!this.editable.value && isUrl(this.value)) {
         // create a link in case of read-only editor and value containing an url
@@ -2438,10 +2493,6 @@ export class Node {
     const node = this
     const expandable = this._hasChilds()
 
-    if (typeof this.editor.options.onEvent === 'function') {
-      this._onEvent(event)
-    }
-
     // check if mouse is on menu or on dragarea.
     // If so, highlight current row and its childs
     if (target === dom.drag || target === dom.menu) {
@@ -2481,14 +2532,14 @@ export class Node {
 
     // swap the value of a boolean when the checkbox displayed left is clicked
     if (type === 'change' && target === dom.checkbox) {
-      this.dom.value.innerHTML = !this.value
+      this.dom.value.textContent = String(!this.value)
       this._getDomValue()
       this._updateDomDefault()
     }
 
     // update the value of the node based on the selected option
     if (type === 'change' && target === dom.select) {
-      this.dom.value.innerHTML = dom.select.value
+      this.dom.value.innerHTML = this._escapeHTML(dom.select.value)
       this._getDomValue()
       this._updateDomValue()
     }
@@ -2503,9 +2554,11 @@ export class Node {
           this._getDomValue()
           this._clearValueError()
           this._updateDomValue()
+
           const escapedValue = this._escapeHTML(this.value)
-          if (domValue.innerHTML !== escapedValue) {
-            // only update if changed, else you lose the caret position when changing tabs for example
+          if (escapedValue !== this._unescapeHTML(getInnerText(domValue))) {
+            // only update when there is an actual change, else you loose the
+            // caret position when changing tabs or whilst typing
             domValue.innerHTML = escapedValue
           }
           break
@@ -2528,7 +2581,7 @@ export class Node {
             // if read-only, we use the regular click behavior of an anchor
             if (isUrl(this.value)) {
               event.preventDefault()
-              window.open(this.value, '_blank')
+              window.open(this.value, '_blank', 'noopener')
             }
           }
           break
@@ -2556,9 +2609,11 @@ export class Node {
         case 'blur': {
           this._getDomField(true)
           this._updateDomField()
+
           const escapedField = this._escapeHTML(this.field)
-          if (domField.innerHTML !== escapedField) {
-            // only update if changed, else you lose the caret position when changing tabs for example
+          if (escapedField !== this._unescapeHTML(getInnerText(domField))) {
+            // only update when there is an actual change, else you loose the
+            // caret position when changing tabs or whilst typing
             domField.innerHTML = escapedField
           }
           break
@@ -2622,6 +2677,11 @@ export class Node {
     if (type === 'keydown') {
       this.onKeyDown(event)
     }
+
+    // fire after applying for example a change by clicking a checkbox
+    if (typeof this.editor.options.onEvent === 'function') {
+      this._onEvent(event)
+    }
   }
 
   /**
@@ -2635,15 +2695,23 @@ export class Node {
    */
   _onEvent (event) {
     const element = event.target
-    if (element === this.dom.field || element === this.dom.value) {
+    const isField = element === this.dom.field
+    const isValue = (
+      element === this.dom.value ||
+      element === this.dom.checkbox ||
+      element === this.dom.select)
+
+    if (isField || isValue) {
       const info = {
         field: this.getField(),
         path: this.getPath()
       }
+
       // For leaf values, include value
-      if (!this._hasChilds() && element === this.dom.value) {
+      if (isValue && !this._hasChilds()) {
         info.value = this.getValue()
       }
+
       this.editor.options.onEvent(info, event)
     }
   }
@@ -2681,7 +2749,7 @@ export class Node {
       if (target === this.dom.value) {
         if (!this.editable.value || event.ctrlKey) {
           if (isUrl(this.value)) {
-            window.open(this.value, '_blank')
+            window.open(this.value, '_blank', 'noopener')
             handled = true
           }
         }
@@ -2754,7 +2822,7 @@ export class Node {
           const appendDom = lastNode.getAppendDom()
           nextDom = appendDom ? appendDom.nextSibling : undefined
         } else {
-          var dom = lastNode.getDom()
+          const dom = lastNode.getDom()
           nextDom = dom.nextSibling
         }
         if (nextDom) {
@@ -2865,7 +2933,7 @@ export class Node {
         }
         handled = true
       } else if (altKey && shiftKey && editable) { // Alt + Shift + Arrow Right
-        dom = firstNode.getDom()
+        const dom = firstNode.getDom()
         const prevDom = dom.previousSibling
         if (prevDom) {
           prevNode = Node.getNodeFromTarget(prevDom)
@@ -2988,11 +3056,15 @@ export class Node {
    * @private
    */
   _onExpand (recurse) {
+    let table
+    let frame
+    let scrollTop
+
     if (recurse) {
       // Take the table offline
-      var table = this.dom.tr.parentNode // TODO: not nice to access the main table like this
-      var frame = table.parentNode
-      var scrollTop = frame.scrollTop
+      table = this.dom.tr.parentNode // TODO: not nice to access the main table like this
+      frame = table.parentNode
+      scrollTop = frame.scrollTop
       frame.removeChild(table)
     }
 
@@ -3173,9 +3245,12 @@ export class Node {
    * or 'array'.
    * @param {String[] | string} path  Path of the child value to be compared
    * @param {String} direction        Sorting direction. Available values: "asc", "desc"
+   * @param {boolean} [triggerAction=true]  If true (default), a user action will be
+   *                                        triggered, creating an entry in history
+   *                                        and invoking onChange.
    * @private
    */
-  sort (path, direction) {
+  sort (path, direction, triggerAction = true) {
     if (typeof path === 'string') {
       path = parsePath(path)
     }
@@ -3222,13 +3297,15 @@ export class Node {
     // update the index numbering
     this._updateDomIndexes()
 
-    this.editor._onAction('sort', {
-      path: this.getInternalPath(),
-      oldChilds: oldChilds,
-      newChilds: this.childs
-    })
-
     this.showChilds()
+
+    if (triggerAction === true) {
+      this.editor._onAction('sort', {
+        path: this.getInternalPath(),
+        oldChilds: oldChilds,
+        newChilds: this.childs
+      })
+    }
   }
 
   /**
@@ -3309,7 +3386,7 @@ export class Node {
 
       // apply the JMESPath query
       const oldValue = this.getValue()
-      const newValue = jmespath.search(oldValue, query)
+      const newValue = this.editor.options.executeQuery(oldValue, query)
       this.setValue(newValue)
 
       const newInternalValue = this.getInternalValue()
@@ -3612,7 +3689,6 @@ export class Node {
    */
   showContextMenu (anchor, onClose) {
     const node = this
-    const titles = Node.TYPE_TITLES
     let items = []
 
     if (this.editable.value) {
@@ -3625,7 +3701,7 @@ export class Node {
             text: translate('auto'),
             className: 'jsoneditor-type-auto' +
                 (this.type === 'auto' ? ' jsoneditor-selected' : ''),
-            title: titles.auto,
+            title: translate('autoType'),
             click: function () {
               node._onChangeType('auto')
             }
@@ -3634,7 +3710,7 @@ export class Node {
             text: translate('array'),
             className: 'jsoneditor-type-array' +
                 (this.type === 'array' ? ' jsoneditor-selected' : ''),
-            title: titles.array,
+            title: translate('arrayType'),
             click: function () {
               node._onChangeType('array')
             }
@@ -3643,7 +3719,7 @@ export class Node {
             text: translate('object'),
             className: 'jsoneditor-type-object' +
                 (this.type === 'object' ? ' jsoneditor-selected' : ''),
-            title: titles.object,
+            title: translate('objectType'),
             click: function () {
               node._onChangeType('object')
             }
@@ -3652,7 +3728,7 @@ export class Node {
             text: translate('string'),
             className: 'jsoneditor-type-string' +
                 (this.type === 'string' ? ' jsoneditor-selected' : ''),
-            title: titles.string,
+            title: translate('stringType'),
             click: function () {
               node._onChangeType('string')
             }
@@ -3711,7 +3787,7 @@ export class Node {
           {
             text: translate('auto'),
             className: 'jsoneditor-type-auto',
-            title: titles.auto,
+            title: translate('autoType'),
             click: function () {
               node._onAppend('', '', 'auto')
             }
@@ -3719,7 +3795,7 @@ export class Node {
           {
             text: translate('array'),
             className: 'jsoneditor-type-array',
-            title: titles.array,
+            title: translate('arrayType'),
             click: function () {
               node._onAppend('', [])
             }
@@ -3727,7 +3803,7 @@ export class Node {
           {
             text: translate('object'),
             className: 'jsoneditor-type-object',
-            title: titles.object,
+            title: translate('objectType'),
             click: function () {
               node._onAppend('', {})
             }
@@ -3735,7 +3811,7 @@ export class Node {
           {
             text: translate('string'),
             className: 'jsoneditor-type-string',
-            title: titles.string,
+            title: translate('stringType'),
             click: function () {
               node._onAppend('', '', 'string')
             }
@@ -3759,7 +3835,7 @@ export class Node {
         {
           text: translate('auto'),
           className: 'jsoneditor-type-auto',
-          title: titles.auto,
+          title: translate('autoType'),
           click: function () {
             node._onInsertBefore('', '', 'auto')
           }
@@ -3767,7 +3843,7 @@ export class Node {
         {
           text: translate('array'),
           className: 'jsoneditor-type-array',
-          title: titles.array,
+          title: translate('arrayType'),
           click: function () {
             node._onInsertBefore('', [])
           }
@@ -3775,7 +3851,7 @@ export class Node {
         {
           text: translate('object'),
           className: 'jsoneditor-type-object',
-          title: titles.object,
+          title: translate('objectType'),
           click: function () {
             node._onInsertBefore('', {})
           }
@@ -3783,7 +3859,7 @@ export class Node {
         {
           text: translate('string'),
           className: 'jsoneditor-type-string',
-          title: titles.string,
+          title: translate('stringType'),
           click: function () {
             node._onInsertBefore('', '', 'string')
           }
@@ -3861,12 +3937,16 @@ export class Node {
    * Show transform modal
    */
   showTransformModal () {
-    const node = this
+    const { modalAnchor, createQuery, executeQuery, queryDescription } = this.editor.options
+    const json = this.getValue()
 
-    const anchor = this.editor.options.modalAnchor || DEFAULT_MODAL_ANCHOR
-    const json = node.getValue()
-    showTransformModal(anchor, json, query => {
-      node.transform(query)
+    showTransformModal({
+      container: modalAnchor || DEFAULT_MODAL_ANCHOR,
+      json,
+      queryDescription, // can be undefined
+      createQuery,
+      executeQuery,
+      onTransform: query => { this.transform(query) }
     })
   }
 
@@ -3991,7 +4071,7 @@ export class Node {
         }
       }
 
-      this.dom.value.innerHTML = (this.type === 'object')
+      this.dom.value.textContent = (this.type === 'object')
         ? ('{' + (nodeName || count) + '}')
         : ('[' + (nodeName || count) + ']')
     }
@@ -4060,13 +4140,13 @@ Node.onDragStart = (nodes, event) => {
   const offsetY = getAbsoluteTop(draggedNode.dom.tr) - getAbsoluteTop(firstNode.dom.tr)
 
   if (!editor.mousemove) {
-    editor.mousemove = addEventListener(window, 'mousemove', event => {
+    editor.mousemove = addEventListener(event.view, 'mousemove', event => {
       Node.onDrag(nodes, event)
     })
   }
 
   if (!editor.mouseup) {
-    editor.mouseup = addEventListener(window, 'mouseup', event => {
+    editor.mouseup = addEventListener(event.view, 'mouseup', event => {
       Node.onDragEnd(nodes, event)
     })
   }
@@ -4151,7 +4231,10 @@ Node.onDrag = (nodes, event) => {
       }
     }
 
-    if (nodePrev) {
+    if (
+      nodePrev &&
+      (editor.options.limitDragging === false || nodePrev.parent === nodes[0].parent)
+    ) {
       nodes.forEach(node => {
         nodePrev.parent.moveBefore(node, nodePrev)
       })
@@ -4169,7 +4252,8 @@ Node.onDrag = (nodes, event) => {
         nodeNext = Node.getNodeFromTarget(trNext)
         if (trNext) {
           bottomNext = trNext.nextSibling
-            ? getAbsoluteTop(trNext.nextSibling) : 0
+            ? getAbsoluteTop(trNext.nextSibling)
+            : 0
           heightNext = trNext ? (bottomNext - topFirst) : 0
 
           if (nodeNext &&
@@ -4227,7 +4311,11 @@ Node.onDrag = (nodes, event) => {
         }
 
         // move the node when its position is changed
-        if (nodeNext && nodeNext.dom.tr && trLast.nextSibling !== nodeNext.dom.tr) {
+        if (
+          nodeNext &&
+          (editor.options.limitDragging === false || nodeNext.parent === nodes[0].parent) &&
+          nodeNext.dom.tr && nodeNext.dom.tr !== trLast.nextSibling
+        ) {
           nodes.forEach(node => {
             nodeNext.parent.moveBefore(node, nodeNext)
           })
@@ -4266,8 +4354,8 @@ Node.onDragEnd = (nodes, event) => {
   const editor = firstNode.editor
 
   // set focus to the context menu button of the first node
-  if (nodes[0]) {
-    nodes[0].dom.menu.focus()
+  if (firstNode && firstNode.dom.menu) {
+    firstNode.dom.menu.focus()
   }
 
   const oldParentPath = editor.drag.oldParent.getInternalPath()
@@ -4315,11 +4403,11 @@ Node.onDragEnd = (nodes, event) => {
   delete editor.drag
 
   if (editor.mousemove) {
-    removeEventListener(window, 'mousemove', editor.mousemove)
+    removeEventListener(event.view, 'mousemove', editor.mousemove)
     delete editor.mousemove
   }
   if (editor.mouseup) {
-    removeEventListener(window, 'mouseup', editor.mouseup)
+    removeEventListener(event.view, 'mouseup', editor.mouseup)
     delete editor.mouseup
   }
 
@@ -4354,65 +4442,87 @@ Node._findEnum = schema => {
 
 /**
  * Return the part of a JSON schema matching given path.
- * @param {Object} schema
+ * @param {Object} topLevelSchema
  * @param {Object} schemaRefs
  * @param {Array.<string | number>} path
+ * @param {Object} currentSchema
  * @return {Object | null}
  * @private
  */
-Node._findSchema = (schema, schemaRefs, path) => {
-  let childSchema = schema
-  let foundSchema = childSchema
+Node._findSchema = (topLevelSchema, schemaRefs, path, currentSchema = topLevelSchema) => {
+  const nextPath = path.slice(1, path.length)
+  const nextKey = path[0]
 
-  let allSchemas = schema.oneOf || schema.anyOf || schema.allOf
-  if (!allSchemas) {
-    allSchemas = [schema]
+  let possibleSchemas = [currentSchema]
+  for (const subSchemas of [currentSchema.oneOf, currentSchema.anyOf, currentSchema.allOf]) {
+    if (Array.isArray(subSchemas)) {
+      possibleSchemas = possibleSchemas.concat(subSchemas)
+    }
   }
 
-  for (let j = 0; j < allSchemas.length; j++) {
-    childSchema = allSchemas[j]
+  for (const schema of possibleSchemas) {
+    currentSchema = schema
 
-    if ('$ref' in childSchema && typeof childSchema.$ref === 'string') {
-      childSchema = schemaRefs[childSchema.$ref]
-      if (childSchema) {
-        foundSchema = Node._findSchema(childSchema, schemaRefs, path)
-      }
-    }
-
-    for (let i = 0; i < path.length && childSchema; i++) {
-      const nextPath = path.slice(i + 1, path.length)
-      const key = path[i]
-
-      if (typeof key === 'string' && childSchema.patternProperties && !(childSchema.properties && key in childSchema.properties)) {
-        for (const prop in childSchema.patternProperties) {
-          if (key.match(prop)) {
-            foundSchema = Node._findSchema(childSchema.patternProperties[prop], schemaRefs, nextPath)
+    if ('$ref' in currentSchema && typeof currentSchema.$ref === 'string') {
+      const ref = currentSchema.$ref
+      if (ref in schemaRefs) {
+        currentSchema = schemaRefs[ref]
+      } else if (ref.startsWith('#/')) {
+        const refPath = ref.substring(2).split('/')
+        currentSchema = topLevelSchema
+        for (const segment of refPath) {
+          if (segment in currentSchema) {
+            currentSchema = currentSchema[segment]
+          } else {
+            throw Error(`Unable to resovle reference ${ref}`)
           }
         }
-      } else if (typeof key === 'string' && childSchema.properties) {
-        if (!(key in childSchema.properties)) {
-          foundSchema = null
+      } else if (ref.match(/#\//g)?.length === 1) {
+        const [schemaUrl, relativePath] = ref.split('#/')
+        if (schemaUrl in schemaRefs) {
+          const referencedSchema = schemaRefs[schemaUrl]
+          const reference = { $ref: '#/'.concat(relativePath) }
+          return Node._findSchema(referencedSchema, schemaRefs, nextPath, reference)
         } else {
-          childSchema = childSchema.properties[key]
-          if (childSchema) {
-            foundSchema = Node._findSchema(childSchema, schemaRefs, nextPath)
+          throw Error(`Unable to resolve reference ${ref}`)
+        }
+      } else {
+        throw Error(`Unable to resolve reference ${ref}`)
+      }
+    }
+
+    // We have no more path segments to resolve, return the currently found schema
+    // We do this here, after resolving references, in case of the leaf schema beeing a reference
+    if (nextKey === undefined) {
+      return currentSchema
+    }
+
+    if (typeof nextKey === 'string') {
+      if (typeof currentSchema.properties === 'object' && currentSchema.properties !== null && nextKey in currentSchema.properties) {
+        currentSchema = currentSchema.properties[nextKey]
+        return Node._findSchema(topLevelSchema, schemaRefs, nextPath, currentSchema)
+      }
+      if (typeof currentSchema.patternProperties === 'object' && currentSchema.patternProperties !== null) {
+        for (const prop in currentSchema.patternProperties) {
+          if (nextKey.match(prop)) {
+            currentSchema = currentSchema.patternProperties[prop]
+            return Node._findSchema(topLevelSchema, schemaRefs, nextPath, currentSchema)
           }
         }
-      } else if (typeof key === 'number' && childSchema.items) {
-        childSchema = childSchema.items
-        if (childSchema) {
-          foundSchema = Node._findSchema(childSchema, schemaRefs, nextPath)
-        }
       }
+      if (typeof currentSchema.additionalProperties === 'object') {
+        currentSchema = currentSchema.additionalProperties
+        return Node._findSchema(topLevelSchema, schemaRefs, nextPath, currentSchema)
+      }
+      continue
+    }
+    if (typeof nextKey === 'number' && typeof currentSchema.items === 'object' && currentSchema.items !== null) {
+      currentSchema = currentSchema.items
+      return Node._findSchema(topLevelSchema, schemaRefs, nextPath, currentSchema)
     }
   }
 
-  // If the found schema is the input schema, the schema does not have the given path
-  if (foundSchema === schema && path.length > 0) {
-    return null
-  }
-
-  return foundSchema
+  return null
 }
 
 /**
@@ -4492,7 +4602,7 @@ Node.onDuplicate = nodes => {
       if (clones[0].parent.type === 'object') {
         // when duplicating a single object property,
         // set focus to the field and keep the original field name
-        clones[0].dom.field.innerHTML = nodes[0].field
+        clones[0].dom.field.innerHTML = nodes[0]._escapeHTML(nodes[0].field)
         clones[0].focus('field')
       } else {
         clones[0].focus()
@@ -4573,14 +4683,6 @@ Node.blurNodes = nodes => {
   } else {
     parent.focus()
   }
-}
-
-// titles with explanation for the different types
-Node.TYPE_TITLES = {
-  auto: translate('autoType'),
-  object: translate('objectType'),
-  array: translate('arrayType'),
-  string: translate('stringType')
 }
 
 // helper function to get the internal path of a node

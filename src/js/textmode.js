@@ -1,14 +1,16 @@
 'use strict'
 
+import jsonrepair from 'jsonrepair'
 import ace from './ace'
-import jmespath from 'jmespath'
-import { translate } from './i18n'
-import { ModeSwitcher } from './ModeSwitcher'
+import { DEFAULT_MODAL_ANCHOR } from './constants'
 import { ErrorTable } from './ErrorTable'
-import { validateCustom } from './validationUtils'
+import { FocusTracker } from './FocusTracker'
+import { setLanguage, setLanguages, translate } from './i18n'
+import { createQuery, executeQuery } from './jmespathQuery'
+import { ModeSwitcher } from './ModeSwitcher'
 import { showSortModal } from './showSortModal'
 import { showTransformModal } from './showTransformModal'
-import { FocusTracker } from './FocusTracker'
+import { tryRequireThemeJsonEditor } from './tryRequireThemeJsonEditor'
 import {
   addClassName,
   debounce,
@@ -18,14 +20,12 @@ import {
   getPositionForPath,
   improveSchemaError,
   isObject,
+  isValidationErrorChanged,
   parse,
-  repair,
   sort,
-  sortObjectKeys,
-  isValidationErrorChanged
+  sortObjectKeys
 } from './util'
-import { DEFAULT_MODAL_ANCHOR } from './constants'
-import { tryRequireThemeJsonEditor } from './tryRequireThemeJsonEditor'
+import { validateCustom } from './validationUtils'
 
 // create a mixin with the functions for text mode
 const textmode = {}
@@ -47,6 +47,8 @@ textmode.create = function (container, options = {}) {
   options.mainMenuBar = options.mainMenuBar !== false
   options.enableSort = options.enableSort !== false
   options.enableTransform = options.enableTransform !== false
+  options.createQuery = options.createQuery || createQuery
+  options.executeQuery = options.executeQuery || executeQuery
 
   this.options = options
 
@@ -56,6 +58,10 @@ textmode.create = function (container, options = {}) {
   } else {
     this.indentation = 2 // number of spaces
   }
+
+  // language
+  setLanguages(this.options.languages)
+  setLanguage(this.options.language)
 
   // grab ace from options if provided
   const _ace = options.ace ? options.ace : ace
@@ -91,7 +97,7 @@ textmode.create = function (container, options = {}) {
   this.lastSchemaErrors = undefined
 
   // create a debounced validate function
-  this._debouncedValidate = debounce(this.validate.bind(this), this.DEBOUNCE_INTERVAL)
+  this._debouncedValidate = debounce(this._validateAndCatch.bind(this), this.DEBOUNCE_INTERVAL)
 
   this.width = container.clientWidth
   this.height = container.clientHeight
@@ -129,7 +135,7 @@ textmode.create = function (container, options = {}) {
     const buttonFormat = document.createElement('button')
     buttonFormat.type = 'button'
     buttonFormat.className = 'jsoneditor-format'
-    buttonFormat.title = 'Format JSON data, with proper indentation and line feeds (Ctrl+\\)'
+    buttonFormat.title = translate('formatTitle')
     this.menu.appendChild(buttonFormat)
     buttonFormat.onclick = () => {
       try {
@@ -144,7 +150,7 @@ textmode.create = function (container, options = {}) {
     const buttonCompact = document.createElement('button')
     buttonCompact.type = 'button'
     buttonCompact.className = 'jsoneditor-compact'
-    buttonCompact.title = 'Compact JSON data, remove all whitespaces (Ctrl+Shift+\\)'
+    buttonCompact.title = translate('compactTitle')
     this.menu.appendChild(buttonCompact)
     buttonCompact.onclick = () => {
       try {
@@ -183,7 +189,7 @@ textmode.create = function (container, options = {}) {
     const buttonRepair = document.createElement('button')
     buttonRepair.type = 'button'
     buttonRepair.className = 'jsoneditor-repair'
-    buttonRepair.title = 'Repair JSON: fix quotes and escape characters, remove comments and JSONP notation, turn JavaScript objects into JSON.'
+    buttonRepair.title = translate('repairTitle')
     this.menu.appendChild(buttonRepair)
     buttonRepair.onclick = () => {
       try {
@@ -192,6 +198,31 @@ textmode.create = function (container, options = {}) {
       } catch (err) {
         me._onError(err)
       }
+    }
+
+    // create undo/redo buttons
+    if (this.mode === 'code') {
+      // create undo button
+      const undo = document.createElement('button')
+      undo.type = 'button'
+      undo.className = 'jsoneditor-undo jsoneditor-separator'
+      undo.title = translate('undo')
+      undo.onclick = () => {
+        this.aceEditor.getSession().getUndoManager().undo()
+      }
+      this.menu.appendChild(undo)
+      this.dom.undo = undo
+
+      // create redo button
+      const redo = document.createElement('button')
+      redo.type = 'button'
+      redo.className = 'jsoneditor-redo'
+      redo.title = translate('redo')
+      redo.onclick = () => {
+        this.aceEditor.getSession().getUndoManager().redo()
+      }
+      this.menu.appendChild(redo)
+      this.dom.redo = redo
     }
 
     // create mode box
@@ -206,14 +237,14 @@ textmode.create = function (container, options = {}) {
     if (this.mode === 'code') {
       const poweredBy = document.createElement('a')
       poweredBy.appendChild(document.createTextNode('powered by ace'))
-      poweredBy.href = 'http://ace.ajax.org'
+      poweredBy.href = 'https://ace.c9.io/'
       poweredBy.target = '_blank'
       poweredBy.className = 'jsoneditor-poweredBy'
       poweredBy.onclick = () => {
         // TODO: this anchor falls below the margin of the content,
         // therefore the normal a.href does not work. We use a click event
         // for now, but this should be fixed.
-        window.open(poweredBy.href, poweredBy.target)
+        window.open(poweredBy.href, poweredBy.target, 'noopener')
       }
       this.menu.appendChild(poweredBy)
     }
@@ -251,8 +282,16 @@ textmode.create = function (container, options = {}) {
       originalSetAnnotations.call(this, annotations && annotations.length ? annotations : me.annotations)
     }
 
-    aceEditor.commands.bindKey('Ctrl-L', null) // disable Ctrl+L (is used by the browser to select the address bar)
-    aceEditor.commands.bindKey('Command-L', null) // disable Ctrl+L (is used by the browser to select the address bar)
+    // disable Ctrl+L quickkey of Ace (is used by the browser to select the address bar)
+    aceEditor.commands.bindKey('Ctrl-L', null)
+    aceEditor.commands.bindKey('Command-L', null)
+
+    // disable the quickkeys we want to use for Format and Compact
+    aceEditor.commands.bindKey('Ctrl-\\', null)
+    aceEditor.commands.bindKey('Command-\\', null)
+    aceEditor.commands.bindKey('Ctrl-Shift-\\', null)
+    aceEditor.commands.bindKey('Command-Shift-\\', null)
+
     this.aceEditor = aceEditor
 
     // register onchange event
@@ -280,10 +319,12 @@ textmode.create = function (container, options = {}) {
     textarea.onblur = this._onBlur.bind(this)
   }
 
+  this._updateHistoryButtons()
+
   this.errorTable = new ErrorTable({
     errorTableVisible: this.mode === 'text',
     onToggleVisibility: function () {
-      me.validate()
+      me._validateAndCatch()
     },
     onFocusLine: function (line) {
       me.isFocused = true
@@ -370,6 +411,13 @@ textmode._onChange = function () {
     return
   }
 
+  // enable/disable undo/redo buttons
+  setTimeout(() => {
+    if (this._updateHistoryButtons) {
+      this._updateHistoryButtons()
+    }
+  })
+
   // validate JSON schema (if configured)
   this._debouncedValidate()
 
@@ -392,6 +440,17 @@ textmode._onChange = function () {
   }
 }
 
+textmode._updateHistoryButtons = function () {
+  if (this.aceEditor && this.dom.undo && this.dom.redo) {
+    const undoManager = this.aceEditor.getSession().getUndoManager()
+
+    if (undoManager && undoManager.hasUndo && undoManager.hasRedo) {
+      this.dom.undo.disabled = !undoManager.hasUndo()
+      this.dom.redo.disabled = !undoManager.hasRedo()
+    }
+  }
+}
+
 /**
  * Open a sort modal
  * @private
@@ -406,14 +465,14 @@ textmode._showSortModal = function () {
       const sortedJson = sort(json, sortedBy.path, sortedBy.direction)
 
       me.sortedBy = sortedBy
-      me.set(sortedJson)
+      me.update(sortedJson)
     }
 
     if (isObject(json)) {
       const sortedJson = sortObjectKeys(json, sortedBy.direction)
 
       me.sortedBy = sortedBy
-      me.set(sortedJson)
+      me.update(sortedJson)
     }
   }
 
@@ -425,12 +484,19 @@ textmode._showSortModal = function () {
  * @private
  */
 textmode._showTransformModal = function () {
-  const me = this
-  const anchor = this.options.modalAnchor || DEFAULT_MODAL_ANCHOR
+  const { modalAnchor, createQuery, executeQuery, queryDescription } = this.options
   const json = this.get()
-  showTransformModal(anchor, json, query => {
-    const updatedJson = jmespath.search(json, query)
-    me.set(updatedJson)
+
+  showTransformModal({
+    container: modalAnchor || DEFAULT_MODAL_ANCHOR,
+    json,
+    queryDescription, // can be undefined
+    createQuery,
+    executeQuery,
+    onTransform: query => {
+      const updatedJson = executeQuery(json, query)
+      this.update(updatedJson)
+    }
   })
 }
 
@@ -453,11 +519,11 @@ textmode._onKeyDown = function (event) {
   const keynum = event.which || event.keyCode
   let handled = false
 
-  if (keynum === 220 && event.ctrlKey) {
-    if (event.shiftKey) { // Ctrl+Shift+\
+  if (keynum === 73 && event.ctrlKey) {
+    if (event.shiftKey) { // Ctrl+Shift+I
       this.compact()
       this._onChange()
-    } else { // Ctrl+\
+    } else { // Ctrl+I
       this.format()
       this._onChange()
     }
@@ -621,7 +687,7 @@ textmode.destroy = function () {
 textmode.compact = function () {
   const json = this.get()
   const text = JSON.stringify(json)
-  this._setText(text, false)
+  this.updateText(text)
 }
 
 /**
@@ -630,7 +696,7 @@ textmode.compact = function () {
 textmode.format = function () {
   const json = this.get()
   const text = JSON.stringify(json, null, this.indentation)
-  this._setText(text, false)
+  this.updateText(text)
 }
 
 /**
@@ -638,8 +704,12 @@ textmode.format = function () {
  */
 textmode.repair = function () {
   const text = this.getText()
-  const repairedText = repair(text)
-  this._setText(repairedText, false)
+  try {
+    const repairedText = jsonrepair(text)
+    this.updateText(repairedText)
+  } catch (err) {
+    // repair was not successful, do nothing
+  }
 }
 
 /**
@@ -731,9 +801,16 @@ textmode._setText = function (jsonText, clearHistory) {
         if (me.aceEditor) {
           me.aceEditor.session.getUndoManager().reset()
         }
-      }, 0)
+      })
     }
+
+    setTimeout(() => {
+      if (this._updateHistoryButtons) {
+        this._updateHistoryButtons()
+      }
+    })
   }
+
   // validate JSON schema
   this._debouncedValidate()
 }
@@ -786,22 +863,22 @@ textmode.validate = function () {
     this.validationSequence = (this.validationSequence || 0) + 1
     const me = this
     const seq = this.validationSequence
-    validateCustom(json, this.options.onValidate)
+    return validateCustom(json, this.options.onValidate)
       .then(customValidationErrors => {
         // only apply when there was no other validation started whilst resolving async results
         if (seq === me.validationSequence) {
           const errors = schemaErrors.concat(parseErrors).concat(customValidationErrors)
           me._renderErrors(errors)
-          if (typeof this.options.onValidationError === 'function') {
-            if (isValidationErrorChanged(errors, this.lastSchemaErrors)) {
-              this.options.onValidationError.call(this, errors)
-            }
-            this.lastSchemaErrors = errors
+          if (
+            typeof this.options.onValidationError === 'function' &&
+            isValidationErrorChanged(errors, this.lastSchemaErrors)
+          ) {
+            this.options.onValidationError.call(this, errors)
           }
+          this.lastSchemaErrors = errors
         }
-      })
-      .catch(err => {
-        console.error('Custom validation function did throw an error', err)
+
+        return this.lastSchemaErrors
       })
   } catch (err) {
     if (this.getText()) {
@@ -820,13 +897,22 @@ textmode.validate = function () {
 
     this._renderErrors(parseErrors)
 
-    if (typeof this.options.onValidationError === 'function') {
-      if (isValidationErrorChanged(parseErrors, this.lastSchemaErrors)) {
-        this.options.onValidationError.call(this, parseErrors)
-      }
-      this.lastSchemaErrors = parseErrors
+    if (
+      typeof this.options.onValidationError === 'function' &&
+      isValidationErrorChanged(parseErrors, this.lastSchemaErrors)
+    ) {
+      this.options.onValidationError.call(this, parseErrors)
     }
+    this.lastSchemaErrors = parseErrors
+
+    return Promise.resolve(this.lastSchemaErrors)
   }
+}
+
+textmode._validateAndCatch = function () {
+  this.validate().catch(err => {
+    console.error('Error running validation:', err)
+  })
 }
 
 textmode._renderErrors = function (errors) {

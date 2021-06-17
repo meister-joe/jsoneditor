@@ -1,34 +1,36 @@
 'use strict'
 
-import VanillaPicker from './vanilla-picker'
+import { autocomplete } from './autocomplete'
+import { ContextMenu } from './ContextMenu'
+import { FocusTracker } from './FocusTracker'
 import { Highlighter } from './Highlighter'
+import { setLanguage, setLanguages, translate } from './i18n'
+import { createQuery, executeQuery } from './jmespathQuery'
+import { ModeSwitcher } from './ModeSwitcher'
+import { Node } from './Node'
 import { NodeHistory } from './NodeHistory'
 import { SearchBox } from './SearchBox'
-import { ContextMenu } from './ContextMenu'
 import { TreePath } from './TreePath'
-import { Node } from './Node'
-import { ModeSwitcher } from './ModeSwitcher'
-import { FocusTracker } from './FocusTracker'
 import {
   addClassName,
   addEventListener,
   debounce,
   getAbsoluteTop,
   getSelectionOffset,
+  getWindow,
   hasParentNode,
   improveSchemaError,
   isPromise,
+  isValidationErrorChanged,
   isValidValidationError,
   parse,
   removeClassName,
   removeEventListener,
-  repair,
   selectContentEditable,
   setSelectionOffset,
-  isValidationErrorChanged
+  tryJsonRepair
 } from './util'
-import { autocomplete } from './autocomplete'
-import { setLanguage, setLanguages, translate } from './i18n'
+import VanillaPicker from './vanilla-picker'
 
 // create a mixin with the functions for tree mode
 const treemode = {}
@@ -126,6 +128,7 @@ treemode._setOptions = function (options) {
     autocomplete: null,
     navigationBar: true,
     mainMenuBar: true,
+    limitDragging: false,
     onSelectionChange: null,
     colorPicker: true,
     onColorPicker: function (parent, color, onChange) {
@@ -134,7 +137,7 @@ treemode._setOptions = function (options) {
         // when there is not enough space below, and there is enough space above
         const pickerHeight = 300 // estimated height of the color picker
         const top = parent.getBoundingClientRect().top
-        const windowHeight = window.innerHeight
+        const windowHeight = getWindow(parent).innerHeight
         const showOnTop = ((windowHeight - top) < pickerHeight && top > pickerHeight)
 
         new VanillaPicker({
@@ -156,6 +159,8 @@ treemode._setOptions = function (options) {
     },
     timestampTag: true,
     timestampFormat: null,
+    createQuery,
+    executeQuery,
     onEvent: null,
     enableSort: true,
     enableTransform: true
@@ -166,13 +171,18 @@ treemode._setOptions = function (options) {
     Object.keys(options).forEach(prop => {
       this.options[prop] = options[prop]
     })
+
+    // default limitDragging to true when a JSON schema is defined
+    if (options.limitDragging == null && options.schema != null) {
+      this.options.limitDragging = true
+    }
   }
 
   // compile a JSON schema validator if a JSON schema is provided
   this.setSchema(this.options.schema, this.options.schemaRefs)
 
   // create a debounced validate function
-  this._debouncedValidate = debounce(this.validate.bind(this), this.DEBOUNCE_INTERVAL)
+  this._debouncedValidate = debounce(this._validateAndCatch.bind(this), this.DEBOUNCE_INTERVAL)
 
   if (options.onSelectionChange) {
     this.onSelectionChange(options.onSelectionChange)
@@ -204,7 +214,7 @@ treemode.set = function (json) {
     this._setRoot(node)
 
     // validate JSON schema (if configured)
-    this.validate()
+    this._validateAndCatch()
 
     // expand
     const recurse = false
@@ -244,7 +254,7 @@ treemode.update = function (json) {
   this.onChangeDisabled = false
 
   // validate JSON schema
-  this.validate()
+  this._validateAndCatch()
 
   // update search result if any
   if (this.searchBox && !this.searchBox.isEmpty()) {
@@ -299,7 +309,7 @@ treemode.setText = function (jsonText) {
     this.set(parse(jsonText)) // this can throw an error
   } catch (err) {
     // try to repair json, replace JavaScript notation with JSON notation
-    const repairedJsonText = repair(jsonText)
+    const repairedJsonText = tryJsonRepair(jsonText)
 
     // try to parse again
     this.set(parse(repairedJsonText)) // this can throw an error
@@ -316,7 +326,7 @@ treemode.updateText = function (jsonText) {
     this.update(parse(jsonText)) // this can throw an error
   } catch (err) {
     // try to repair json, replace JavaScript notation with JSON notation
-    const repairJsonText = repair(jsonText)
+    const repairJsonText = tryJsonRepair(jsonText)
 
     // try to parse again
     this.update(parse(repairJsonText)) // this can throw an error
@@ -578,26 +588,33 @@ treemode.validate = function () {
     this.validationSequence++
     const me = this
     const seq = this.validationSequence
-    this._validateCustom(json)
+    return this._validateCustom(json)
       .then(customValidationErrors => {
         // only apply when there was no other validation started whilst resolving async results
         if (seq === me.validationSequence) {
           const errorNodes = [].concat(schemaErrors, customValidationErrors || [])
           me._renderValidationErrors(errorNodes)
-          if (typeof this.options.onValidationError === 'function') {
-            if (isValidationErrorChanged(errorNodes, this.lastSchemaErrors)) {
-              this.options.onValidationError.call(this, errorNodes)
-            }
-            this.lastSchemaErrors = errorNodes
+          if (
+            typeof this.options.onValidationError === 'function' &&
+            isValidationErrorChanged(errorNodes, this.lastSchemaErrors)
+          ) {
+            this.options.onValidationError.call(this, errorNodes)
           }
+
+          this.lastSchemaErrors = errorNodes
         }
-      })
-      .catch(err => {
-        console.error(err)
+
+        return this.lastSchemaErrors
       })
   } catch (err) {
-    console.error(err)
+    return Promise.reject(err)
   }
+}
+
+treemode._validateAndCatch = function () {
+  this.validate().catch(err => {
+    console.error('Error running validation:', err)
+  })
 }
 
 treemode._renderValidationErrors = function (errorNodes) {
@@ -623,8 +640,8 @@ treemode._renderValidationErrors = function (errorNodes) {
 
       error: {
         message: pair[0].type === 'object'
-          ? 'Contains invalid properties' // object
-          : 'Contains invalid items' // array
+          ? translate('containsInvalidProperties') // object
+          : translate('containsInvalidItems') // array
       }
     }))
     .concat(errorNodes)
@@ -1208,7 +1225,7 @@ treemode._updateTreePath = function (pathNodes) {
   function getName (node) {
     return node.parent
       ? ((node.parent.type === 'array') ? node.index : node.field)
-      : node.type
+      : (node.field || node.type)
   }
 }
 
@@ -1271,7 +1288,7 @@ treemode._updateDragDistance = function (event) {
 
 /**
  * Start multi selection of nodes by dragging the mouse
- * @param event
+ * @param {MouseEvent} event
  * @private
  */
 treemode._onMultiSelectStart = function (event) {
@@ -1293,12 +1310,12 @@ treemode._onMultiSelectStart = function (event) {
 
   const editor = this
   if (!this.mousemove) {
-    this.mousemove = addEventListener(window, 'mousemove', event => {
+    this.mousemove = addEventListener(event.view, 'mousemove', event => {
       editor._onMultiSelect(event)
     })
   }
   if (!this.mouseup) {
-    this.mouseup = addEventListener(window, 'mouseup', event => {
+    this.mouseup = addEventListener(event.view, 'mouseup', event => {
       editor._onMultiSelectEnd(event)
     })
   }
@@ -1308,7 +1325,7 @@ treemode._onMultiSelectStart = function (event) {
 
 /**
  * Multiselect nodes by dragging
- * @param event
+ * @param {MouseEvent} event
  * @private
  */
 treemode._onMultiSelect = function (event) {
@@ -1351,12 +1368,14 @@ treemode._onMultiSelect = function (event) {
 
 /**
  * End of multiselect nodes by dragging
+ * @param {MouseEvent} event
  * @private
  */
-treemode._onMultiSelectEnd = function () {
+treemode._onMultiSelectEnd = function (event) {
   // set focus to the context menu button of the first node
-  if (this.multiselection.nodes[0]) {
-    this.multiselection.nodes[0].dom.menu.focus()
+  const firstNode = this.multiselection.nodes[0]
+  if (firstNode && firstNode.dom.menu) {
+    firstNode.dom.menu.focus()
   }
 
   this.multiselection.start = null
@@ -1364,11 +1383,11 @@ treemode._onMultiSelectEnd = function () {
 
   // cleanup global event listeners
   if (this.mousemove) {
-    removeEventListener(window, 'mousemove', this.mousemove)
+    removeEventListener(event.view, 'mousemove', this.mousemove)
     delete this.mousemove
   }
   if (this.mouseup) {
-    removeEventListener(window, 'mouseup', this.mouseup)
+    removeEventListener(event.view, 'mouseup', this.mouseup)
     delete this.mouseup
   }
 }
@@ -1480,6 +1499,11 @@ treemode._showAutoComplete = function (element) {
   let jsonElementType = ''
   if (element.className.indexOf('jsoneditor-value') >= 0) jsonElementType = 'value'
   if (element.className.indexOf('jsoneditor-field') >= 0) jsonElementType = 'field'
+
+  if (jsonElementType === '') {
+    // Unknown element field. Could be a button or something else
+    return
+  }
 
   const self = this
 

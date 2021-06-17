@@ -44,9 +44,19 @@ Constructs a new JSONEditor.
 
   ```js
   var options = {
-    ajv: Ajv({ allErrors: true, verbose: true })
+    ajv: Ajv({ 
+      allErrors: true, 
+      verbose: true,
+      jsonPointers: false,
+      $data: true
+    })
   }
   ```
+  
+  > IMPORTANT: JSONEditor relies on some specific configuration of Ajv. 
+  > Providing different configuration (like `jsonPointers: true` instead of `false`) 
+  > results in JSONEditor breaking because the format of the Ajv errors differs
+  > from what is expected.
 
 - `{function} onChange()`
 
@@ -163,13 +173,16 @@ Constructs a new JSONEditor.
   
   Also see the option `schema` for JSON schema validation.
 
-- `{function} onValidationError(errors)`
+- `{function} onValidationError(errors: ValidationError[])`
 
   Set a callback function for validation and parse errors. Available in all modes.
+  The `ValidationError` contains a `type`, `path`, and `message`. 
 
   On validation of the json, if errors of any kind were found this callback is invoked with the errors data.
 
   On change, the callback will be invoked only if errors were changed.
+
+  See also method `JSONEditor.validate()`.
 
   Example:
 
@@ -222,15 +235,19 @@ Constructs a new JSONEditor.
 
 - `{boolean} escapeUnicode`
 
-  If true, unicode characters are escaped and displayed as their hexadecimal code (like `\u260E`) instead of of the character itself (like `☎`). `false` by default.
+  If `true`, unicode characters are escaped and displayed as their hexadecimal code (like `\u260E`) instead of of the character itself (like `☎`). `false` by default.
 
 - `{boolean} sortObjectKeys`
 
-  If true, object keys in 'tree', 'view' or 'form' mode list be listed alphabetically instead by their insertion order. Sorting is performed using a natural sort algorithm, which makes it easier to see objects that have string numbers as keys. `false` by default.
+  If `true`, object keys in 'tree', 'view' or 'form' mode list be listed alphabetically instead by their insertion order. Sorting is performed using a natural sort algorithm, which makes it easier to see objects that have string numbers as keys. `false` by default.
+
+- `{boolean} limitDragging`
+
+  If `false`, nodes can be dragged from any parent node to any other parent node. If `true`, nodes can only be dragged inside the same parent node, which effectively only allows reordering of nodes. By default, `limitDragging` is `true` when no JSON `schema` is defined, and `false` otherwise.
 
 - `{boolean} history`
 
-  Enables history, adds a button Undo and Redo to the menu of the JSONEditor. `true` by default. Only applicable when `mode` is 'tree' or 'form'.
+  Enables history, adds a button Undo and Redo to the menu of the JSONEditor. `true` by default. Only applicable when `mode` is `'tree'`, `'form'`, or `'preview'`.
 
 - `{String} mode`
 
@@ -360,7 +377,7 @@ Constructs a new JSONEditor.
 
 - `{boolean} navigationBar`
 
-  Adds navigation bar to the menu - the navigation bar visualize the current position on the tree structure as well as allows breadcrumbs navigation. `true by default. Only applicable when `mode` is 'tree', 'form' or 'view'.
+  Adds navigation bar to the menu - the navigation bar visualize the current position on the tree structure as well as allows breadcrumbs navigation. `true` by default. Only applicable when `mode` is 'tree', 'form' or 'view'.
 
 - `{boolean} statusBar`
 
@@ -437,6 +454,14 @@ Constructs a new JSONEditor.
   }
   ```
   Only applicable when `mode` is 'form', 'tree' or 'view'.  
+
+- `{function} onFocus({ type: 'focus', target })`
+  Callback method, triggered when the editor comes into focus, 
+  passing an object `{type, target}`, Applicable for all modes.
+
+- `{function} onBlur({ type: 'blur', target })`
+  Callback method, triggered when the editor goes out of focus, 
+  passing an object `{type, target}`, Applicable for all modes.
 
 - `{boolean} colorPicker`
 
@@ -543,7 +568,7 @@ Constructs a new JSONEditor.
 
 - `{string} language`
 
-  The default language comes from the browser navigator, but you can force a specific language. So use here string as 'en' or 'pt-BR'. Built-in languages: `en`, `pt-BR`, `zh-CN`, `tr`, `ja`, `fr-FR`. Other translations can be specified via the option `languages`.
+  The default language comes from the browser navigator, but you can force a specific language. So use here string as 'en' or 'pt-BR'. Built-in languages: `en`, `es` `zh-CN`, `pt-BR`, `tr`, `ja`, `fr-FR`, `de`, `ru`, `ko`. Other translations can be specified via the option `languages`.
 
 - `{Object} languages`
 
@@ -589,6 +614,55 @@ Constructs a new JSONEditor.
 - `{Number} maxVisibleChilds`
 
   Number of children allowed for a given node before the "show more / show all" message appears (in 'tree', 'view', or 'form' modes). `100` by default.
+  
+- `{ function(json: JSON, queryOptions: QueryOptions) -> string } createQuery`
+
+  Create a query string based on query options filled in the Transform Wizard in the Transform modal. 
+  Normally used in combination with `executeQuery`.
+  The input for the function are the entered query options and the current JSON, and the output
+  must be a string containing the query. This query will be executed using `executeQuery`.
+  
+  The query options have the following structure:
+  
+  ```
+  interface QueryOptions {
+    filter?: {
+      field: string | '@'
+      relation: '==' | '!=' | '<' | '<=' | '>' | '>='
+      value: string
+    }
+    sort?: {
+      field: string | '@'
+      direction: 'asc' | 'desc'
+    }
+    projection?: {
+      fields: string[]
+    }
+  }
+  ```
+  
+  Note that there is a special case `'@'` for `filter.field` and `sort.field`.
+  It means that the field itself is selected, for example when having an array containing numbers.
+  
+  A usage example can be found in `examples/23_custom_query_language.html`.
+  
+
+- `{ function(json: JSON, query: string) -> JSON } executeQuery`
+
+  Replace the build-in query language used in the Transform modal with a custom language.
+  Normally used in combination with `createQuery`.
+  The input for the function is the current JSON and a query string, and output must be the transformed JSON.
+
+  A usage example can be found in `examples/23_custom_query_language.html`.
+
+- `{string} queryDescription` 
+
+  A text description displayed on top of the Transform modal. 
+  Can be used to explain a custom query language implemented via `createQuery` and `executeQuery`.
+  The text can contain HTML code like a link to a web page.
+  
+  A usage example can be found in `examples/23_custom_query_language.html`.
+
 
 ### Methods
 
@@ -706,7 +780,7 @@ See also `JSONEditor.update(json)`.
 
 #### `JSONEditor.setMode(mode)`
 
-Switch mode. Mode `code` requires the [Ace editor](http://ace.ajax.org/).
+Switch mode. Mode `code` requires the [Ace editor](https://ace.c9.io/).
 
 *Parameters:*
 
@@ -810,6 +884,20 @@ valid JSON and the editor is in mode `tree`, `view`, or `form`.
 - `{String} jsonString`
 
   Contents of the editor as string.
+
+#### `JSONEditor.validate()`
+
+Validate the JSON document against the configured JSON schema or custom validator.
+See also the `onValidationError` callback.
+
+*Returns:*
+
+- `{Promise<ValidationError[]>} errorsPromise`
+
+  Returns a promise which resolves with the current validation errors, 
+  or an empty list when there are no errors. The `ValidationError` contains
+  a `type`, `path`, and `message`.
+
 
 ### Static properties
 

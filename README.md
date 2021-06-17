@@ -2,9 +2,9 @@
 
 [![Version](https://img.shields.io/npm/v/jsoneditor.svg)](https://www.npmjs.com/package/jsoneditor)
 [![Downloads](https://img.shields.io/npm/dm/jsoneditor.svg)](https://www.npmjs.com/package/jsoneditor)
-![Maintenance](https://img.shields.io/maintenance/yes/2019.svg)
+[![Maintenance](https://img.shields.io/maintenance/yes/2021.svg)](https://github.com/josdejong/jsoneditor/pulse)
 [![License](https://img.shields.io/github/license/josdejong/jsoneditor.svg)](https://github.com/josdejong/jsoneditor/blob/master/LICENSE)
-[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fjosdejong%2Fjsoneditor.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fjosdejong%2Fjsoneditor?ref=badge_shield) [![Greenkeeper badge](https://badges.greenkeeper.io/josdejong/jsoneditor.svg)](https://greenkeeper.io/)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Fjosdejong%2Fjsoneditor.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Fjosdejong%2Fjsoneditor?ref=badge_shield)
 
 JSON Editor is a web-based tool to view, edit, format, and validate JSON.
 It has various modes such as a tree editor, a code editor, and a plain text
@@ -78,15 +78,18 @@ with npm (recommended):
 > Note that to use JSONEditor in Internet Explorer 11, it is necessary
 > to load a polyfill for `Promise` in your application.
 
+Alternatively, you can use another JavaScript package manager like https://yarnpkg.com/, or a CDN such as https://cdnjs.com/ or https://www.jsdelivr.com/.
 
 ## Use
 
+> Note that in the following example, you'll have to change the urls `jsoneditor/dist/jsoneditor.min.js` and `jsoneditor/dist/jsoneditor.min.css` to match the place where you've downloaded the library, or fill in the URL of the CDN you're using.
+
 ```html
 <!DOCTYPE HTML>
-<html>
+<html lang="en">
 <head>
     <!-- when using the mode "code", it's important to specify charset utf-8 -->
-    <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+    <meta charset="utf-8">
 
     <link href="jsoneditor/dist/jsoneditor.min.css" rel="stylesheet" type="text/css">
     <script src="jsoneditor/dist/jsoneditor.min.js"></script>
