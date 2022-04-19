@@ -282,40 +282,36 @@ JSONEditor.prototype.setMode = function (mode) {
 
   options.mode = mode
   const config = JSONEditor.modes[mode]
-  if (config) {
-    try {
-      const asText = (config.data === 'text')
-      name = this.getName()
-      data = this[asText ? 'getText' : 'get']() // get text or json
-
-      this.destroy()
-      clear(this)
-      extend(this, config.mixin)
-      this.create(container, options)
-
-      this.setName(name)
-      this[asText ? 'setText' : 'set'](data) // set text or json
-
-      if (typeof config.load === 'function') {
-        try {
-          config.load.call(this)
-        } catch (err) {
-          console.error(err)
-        }
-      }
-
-      if (typeof options.onModeChange === 'function' && mode !== oldMode) {
-        try {
-          options.onModeChange(mode, oldMode)
-        } catch (err) {
-          console.error(err)
-        }
-      }
-    } catch (err) {
-      this._onError(err)
-    }
-  } else {
+  if (!config) {
     throw new Error('Unknown mode "' + options.mode + '"')
+  }
+
+  const asText = (config.data === 'text')
+  name = this.getName()
+  data = this[asText ? 'getText' : 'get']() // get text or json
+
+  this.destroy()
+  clear(this)
+  extend(this, config.mixin)
+  this.create(container, options)
+
+  this.setName(name)
+  this[asText ? 'setText' : 'set'](data) // set text or json
+
+  if (typeof config.load === 'function') {
+    try {
+      config.load.call(this)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  if (typeof options.onModeChange === 'function' && mode !== oldMode) {
+    try {
+      options.onModeChange(mode, oldMode)
+    } catch (err) {
+      console.error(err)
+    }
   }
 }
 
@@ -329,7 +325,8 @@ JSONEditor.prototype.getMode = function () {
 
 /**
  * Throw an error. If an error callback is configured in options.error, this
- * callback will be invoked. Else, a regular error is thrown.
+ * callback will be invoked. Else, a basic alert window with the error message
+ * will be shown to the user.
  * @param {Error} err
  * @private
  */
@@ -337,7 +334,7 @@ JSONEditor.prototype._onError = function (err) {
   if (this.options && typeof this.options.onError === 'function') {
     this.options.onError(err)
   } else {
-    throw err
+    alert(err.toString())
   }
 }
 
@@ -387,6 +384,7 @@ JSONEditor.prototype.setSchema = function (schema, schemaRefs) {
       // add schema to the options, so that when switching to an other mode,
       // the set schema is not lost
       this.options.schema = schema
+      this.options.schemaRefs = schemaRefs
 
       // validate now
       this.validate()

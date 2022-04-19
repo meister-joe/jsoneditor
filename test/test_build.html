@@ -13,6 +13,7 @@
       line-height: 150%;
       width: 500px;
       padding-left: 40px;
+      background: #f5f5f5;
     }
 
     code {
@@ -39,6 +40,10 @@
 
 <p>
   <button id="update">Update</button>
+</p>
+
+<p>
+  <iframe></iframe>
 </p>
 
 <script>
@@ -68,9 +73,11 @@
     },
     onFocus: function(event) {
       console.log('Focus : ',event);
+      container.style.outline = '5px solid red';
     },
     onBlur: function(event) {
       console.log('Blur : ',event);
+      container.style.outline = '';
     },
     indentation: 4,
     // escapeUnicode: true,

@@ -5,7 +5,7 @@ const log = require('fancy-log')
 const format = require('date-format')
 const concatCss = require('gulp-concat-css')
 const minifyCSS = require('gulp-clean-css')
-const sass = require('gulp-sass')
+const sass = require('gulp-sass')(require('sass'))
 const mkdirp = require('mkdirp')
 const webpack = require('webpack')
 const uglify = require('uglify-js')
@@ -181,6 +181,8 @@ gulp.task('bundle-minimalist', function (done) {
 
 // bundle css
 gulp.task('bundle-css', function (done) {
+  const concatOptions = { rebaseUrls: false }
+  const minifyOptions = { rebase: false }
   gulp
     .src(['src/scss/jsoneditor.scss'])
     .pipe(
@@ -188,10 +190,10 @@ gulp.task('bundle-css', function (done) {
         // importer: tildeImporter
       })
     )
-    .pipe(concatCss(NAME + '.css'))
+    .pipe(concatCss(NAME + '.css', concatOptions))
     .pipe(gulp.dest(DIST))
-    .pipe(concatCss(NAME + '.min.css'))
-    .pipe(minifyCSS())
+    .pipe(concatCss(NAME + '.min.css', concatOptions))
+    .pipe(minifyCSS(minifyOptions))
     .pipe(gulp.dest(DIST))
   done()
 })
